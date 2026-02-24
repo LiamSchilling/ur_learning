@@ -118,7 +118,7 @@ class FST:
         except for from previous invokations of this function.
 
         Args:
-            *args: information to be encoded as a string name.
+            *args: information to be encoded as a state name.
 
         Return:
             str: a name that encodes the values of the arguments.
