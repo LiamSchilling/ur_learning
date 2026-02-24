@@ -9,7 +9,7 @@ option) any later version.
 
 Modified by William (Liam) Schilling (Feb. 2026):
 
-Implemented fundemental finite-state operations,
+Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
 that accepts a relation over strings.
 Specifically, added `fresh_state`, `encode_state`, `trim_inaccessible`, `trim_useless`, `trim`,
