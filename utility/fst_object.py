@@ -13,7 +13,34 @@ Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
 that accepts a relation over strings.
 Specifically, added `fresh_state`, `encode_state`, `trim_inaccessible`, `trim_useless`, `trim`,
-`invert`, `expand`, `prefix_closure`, and `union`.
+`invert`, `expand`, `prefix_closure`, `union`, `intersect`, `compose`, and `determinize`.
+
+These functions assume the following `FST` representation invariants, stated as type annotations:
+    Q (Annotated[list[str], "no duplicates"])
+    Sigma (Annotated[list[Annotated[str, "length==1"]], "no duplicates"])
+    Gamma (Annotated[list[Annotated[str, "length==1"]], "no duplicates"])
+    qe (Annotated[str, "in Q"])
+    E (Annotated[list[
+            Annotated[str, "in Q"],
+            Annotated[str, "alphabet is Sigma"],
+            Annotated[str, "alphabet is Gamma"],
+            Annotated[str, "in Q"]
+        ], "no duplicates"])
+    stout (dict[
+            Annotated[str, "in Q"],
+            Annotated[str, "alphabet is Gamma"]
+        ])
+As an additional note, we take states that are not keys of `stout` to be the rejecting states.
+This is different from the `DFA` class in `dfa_object.py`, which marks accepting states separately.
+
+The functions explicitly track the following useful FST properties.
+The docstrings declare which are ensured by and which are invariants of the implementations.
+- Trimmedness: Every state and transition is traversed by some accepting run
+  (except in the edge case of the empty FST, which may only have one state and no transitions).
+- Final-output emptiness: Every final output (values of `stout`) is the empty string.
+- Input-string expansion: The input string of every transition is either a character or empty.
+- Determinism: The input string of every transition is a character,
+  and for each state, every character is the input string of no more than one outgoing transition.
 """
 
 from copy import deepcopy
@@ -95,7 +122,7 @@ class FST:
     def fresh_state(self, name_prefix):
         """Finds a name that is not the name of a state already in the FST.
         Specifically, returns the first available name of the form `f"{name_prefix}.{i}"`
-        where `i` is an integer.
+        where `i` is a nonnegative integer.
 
         Args:
             name_prefix (str): guaranteed to be a prefix of the return value.
@@ -114,8 +141,12 @@ class FST:
     def encode_state(*args):
         """Returns a name that encodes the values of all the passed arguments.
         The encoding is guaranteed to be one-to-one as long as
-        the string representations of the arguments do not contain `;`,
+        the string representations of the arguments do not contain `;`, `<`, or `>`,
         except for from previous invokations of this function.
+
+        It is important that the client adhere to this condition in their FSTs,
+        or else the state encodings produced by functions in our library
+        could violate the "no duplicates" invariant of the state set.
 
         Args:
             *args: information to be encoded as a state name.
@@ -128,6 +159,12 @@ class FST:
 def trim_inaccessible(F):
     """Removes states and transitions from the FST
     that are not accessible from the initial state.
+
+    Invariants:
+        trimmedness
+        final-output emptiness
+        input-string expansion
+        determinism
 
     Args:
         F (FST): the original FST.
@@ -163,6 +200,12 @@ def trim_useless(F):
     from which no accepting state is accessible,
     except for the initial state, which is not allowed to be removed.
 
+    Invariants:
+        trimmedness
+        final-output emptiness
+        input-string expansion
+        determinism
+
     Args:
         F (FST): the original FST.
 
@@ -193,13 +236,21 @@ def trim_useless(F):
     # copy over the final outputs of the states that remain
     for q, w in F.stout:
         if q in G.Q:
-            G.stoud[q] = w
+            G.stout[q] = w
 
     return G
 
 def trim(F):
     """Removes states and transitions from the FST
     that are never traversed by an accepting run.
+
+    Ensures:
+        trimmedness
+
+    Invariants:
+        final-output emptiness
+        input-string expansion
+        determinism
 
     Args:
         F (FST): the original FST.
@@ -212,6 +263,12 @@ def trim(F):
 def invert(F):
     """Given an FST that accepts the relation `R`,
     returns an FST that accepts the relation `{ (u, v) | (v, u) ∈ R }`.
+
+    Ensures:
+        final-output emptiness
+
+    Invariants:
+        trimmedness
 
     Args:
         F (FST): the original FST.
@@ -227,17 +284,29 @@ def invert(F):
     for [q, u, v, q_] in G.E:
         G.E.append([q, v, u, q_])
 
-    # account for final outputs by turning them into transitions to new accepting states
+    # account for nonempty final outputs by turning them into transitions to new accepting states,
+    # if empty then just copy the final output verbatim
     for q, w in F.stout:
-        G.Q.append(q_ := G.fresh_state_name(q))
-        G.E.append([q, w, "", q_])
-        G.stout[q_] = ""
+        if w == "":
+            G.stout[q] = ""
+        else:
+            G.Q.append(q_ := G.fresh_state_name(q))
+            G.E.append([q, w, "", q_])
+            G.stout[q_] = ""
 
     return G
 
 def expand(F):
     """Expands transitions with multi-character input strings
     into non-accepting chains of transitions with single-character input strings.
+
+    Ensures:
+        input-string expansion
+
+    Invariants:
+        trimmedness
+        final-output emptiness
+        determinism
 
     Args:
         F (FST): the original FST.
@@ -253,15 +322,15 @@ def expand(F):
     # Every state `q` is mapped to many new states `<q; u>`,
     # where `u` is every prefix of the outgoing input strings from `q`.
     # Every transition `[q, u, v, q']` is mapped to a series of new transitions
-    # of the form `[<q; w>, c, "", <q; wc>]`, where `wc` is a prefix of `u`,
-    # along with the outputting transition `[<q; u>, "", v, <q'; "">]`.
+    # of the form `[<q; w>, c, "", <q; wc>]`, where `wc` is an incomplete prefix of `u`,
+    # along with the completing transition `[<q; w>, c, v, <q'; "">]`, where `wc` equals `u`.
     for q in F.Q:
         Q_set.insert(FST.encode_state(q, ""))
     for [q, u, v, q_] in F.E:
-        for i in range(len(u)):
-            Q_set.insert(FST.encode_state(q, u[:i+1]))
-            E_set.insert([FST.encode_state(q, u[:i]), u[i], "", FST.encode_state(q, u[:i+1])])
-        E_set.insert([FST.encode_state(q, u), "", v, FST.encode_state(q_, "")])
+        for i in range(1, len(u)):
+            Q_set.insert(FST.encode_state(q, u[:i]))
+            E_set.insert([FST.encode_state(q, u[:i-1]), u[i-1], "", FST.encode_state(q, u[:i])])
+        E_set.insert([FST.encode_state(q, u[:-1]), u[-1:], v, FST.encode_state(q_, "")])
 
     # copy over the final outputs
     for q, w in F.stout:
@@ -276,25 +345,40 @@ def prefix_closure(F):
     How the function treats FST outputs is currently underspecified, though we guarantee that
     the relation accepted by the original FST is a subset of the relation accepted by the new FST.
 
+    Ensures:
+        trimmedness
+        input-string expansion
+
+    Invariants:
+        final-output emptiness
+        determinism
+
     Args:
         F (FST): the original FST.
 
     Returns:
-        FST: the new FST.
+        FST: the prefix-closure FST.
     """
     # construct an FST where exactly the prefix closure of the original domain has valid runs
     F = expand(trim(F))
 
-    # mark every state as accepting
-    for q in F.Q:
-        if q not in F.stout:
-            F.stout[q] = ""
+    # mark every state as accepting,
+    # unless the FST is just one rejecting state, which is the empty FST edge case
+    if not (len(F.Q) == 1 and len(F.stout) == 0):
+        for q in F.Q:
+            if q not in F.stout:
+                F.stout[q] = ""
 
     return F
 
 def union(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
     returns an FST that accepts the relation `RF ∪ RG`.
+
+    Invariants:
+        trimmedness
+        final-output emptiness
+        input-string expansion
 
     Args:
         F (FST): the left-hand original FST.
@@ -305,11 +389,10 @@ def union(F, G):
     """
     # initialize the new FST
     H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
-    H.Q, H.E, H.qe, H.stout = [], [], "q0", {}
+    H.Q, H.E, H.qe, H.stout = [], [], FST.encode_state("LEFT", F.qe), {}
 
-    # create epsilon transitions to nondeterministically choose between running `F` and `G`
-    H.E.append(["q0", "", "", FST.encode_state("LEFT", F.qe)])
-    H.E.append(["q0", "", "", FST.encode_state("RIGHT", G.qe)])
+    # create an epsilon transition to nondeterministically choose between running `F` and `G`
+    H.E.append([FST.encode_state("LEFT", F.qe), "", "", FST.encode_state("RIGHT", G.qe)])
 
     # copy over the states from both `F` and `G`
     for qf in F.Q:
@@ -335,6 +418,12 @@ def intersect(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
     returns an FST that accepts the relation `RF ∩ RG`.
 
+    Ensures:
+        ?
+
+    Invariants:
+        ?
+
     Args:
         F (FST): the left-hand original FST.
         G (FST): the right-hand original FST.
@@ -351,6 +440,12 @@ def compose(F, G):
     (which is guaranteed if both original FSTs are deterministic),
     this has the effect of typical function composition.
 
+    Ensures:
+        ?
+
+    Invariants:
+        ?
+
     Args:
         F (FST): the left-hand (second applied) original FST.
         G (FST): the right-hand (first applied) original FST.
@@ -364,7 +459,13 @@ def determinize(F):
     """Turns a nondeterministic FST that recognizes a subsequential function
     into a deterministic FST that recognizes the same function.
     A deterministic FST has only single-character input strings,
-    and at most one outgoing transition with each input string from each state.
+    and for each state, at most one outgoing transition with every input string.
+
+    Ensures:
+        ?
+
+    Invariants:
+        ?
 
     Args:
         F (FST): the original functional FST.
