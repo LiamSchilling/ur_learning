@@ -13,8 +13,8 @@ Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
 that accepts a relation over strings.
 Specifically, added `fresh_state`, `encode_state`, `trim_inaccessible`, `trim_useless`, `trim`,
-`expand_inputs`, `expand_final`, `invert`, `prefix_closure`, `union`, `intersect`, `compose`,
-and `determinize`.
+`expand_inputs`, `expand_final`, `invert`, `concatenate`, `kleene_closure`, `prefix_closure`,
+`union`, `intersect`, `compose`, and `determinize`.
 
 These functions assume the following `FST` representation invariants, stated as type annotations:
     Q (Annotated[list[str], "no duplicates"])
@@ -38,6 +38,7 @@ The functions explicitly track the following useful FST properties.
 The docstrings declare which are ensured by and which are invariants of the implementations.
 - Trimmedness: Every state and transition is traversed by some accepting run
   (except in the edge case of the empty FST, which may only have one state and no transitions).
+  Because of this edge case, some functions must take special care to be trimmedness-preserving.
 - Final-output emptiness: Every final output (values of `stout`) is the empty string.
 - Input-string expansion: The input string of every transition is either a character or empty.
 - Determinism: The input string of every transition is a character,
@@ -156,6 +157,68 @@ class FST:
             str: a name that encodes the values of the arguments.
         """
         return f"<{args.map(str).join(";")}>"
+    
+    def is_trim_but_empty(F):
+        """A helper function that checks
+        whether an FST is the edge case of the trimmedness condition.
+        That is, the empty FST with one rejecting state and no transitions.
+
+        Args:
+            F (FST): the FST to be checked.
+        
+        Returns:
+            bool: whether the FST has one rejecting state and no transitions.
+        """
+        return len(F.Q) == 1 and len(F.E) == 0 and len(F.stout) == 0
+    
+def new_rejector(Sigma, Gamma):
+    """Creates an FST that rejects every string pair.
+    
+    Ensures:
+        trimmedness
+        final-output emptiness
+        input-string expansion
+        determinism
+
+    Args:
+        Sigma (list): the input alphabet.
+        Gamma (list): the output alphabet.
+    
+    Returns:
+        FST: the rejector FST.
+    """
+    # initialize the new FST
+    F = FST(Sigma, Gamma)
+    F.Q, F.E, F.qe, F.stout = ["q"], [], "q", {}
+
+    return F
+
+def new_acceptor(Sigma, Gamma):
+    """Creates an FST that accepts every string pair.
+    
+    Ensures:
+        trimmedness
+        final-output emptiness
+        input-string expansion
+
+    Args:
+        Sigma (list): the input alphabet.
+        Gamma (list): the output alphabet.
+    
+    Returns:
+        FST: the acceptor FST.
+    """
+    # initialize the new FST
+    F = FST(Sigma, Gamma)
+    F.Q, F.E, F.qe, F.stout = ["q"], [], "q", {"q" : ""}
+
+    # add transitions that allow writing any character to input or output
+    for c in Sigma:
+        F.E.append(["q", c, "", "q"])
+    for c in Gamma:
+        F.E.append(["q", "", c, "q"])
+
+    return F
 
 def trim_inaccessible(F):
     """Removes states and transitions from the FST
@@ -368,6 +431,91 @@ def invert(F):
 
     return G
 
+def concatenate(F, G):
+    """Given FSTs that accept the relations `RF` and `RG`, respectively,
+    returns an FST that accepts the relation `RF · RG`.
+    That is, the relation of all string pairs that are the result of
+    concatenating a string pair from `RF` to a string pair from `RG`.
+
+    Invariants:
+        trimmedness
+        input-string expansion
+        final-output emptiness
+
+    Args:
+        F (FST): the left-hand original FST.
+        G (FST): the right-hand original FST.
+
+    Returns:
+        FST: the concatenation FST.
+    """
+    # we need final outputs of the first machine to be empty
+    # so that we do not miss output upon traversal to the next machine
+    F = expand_final(F)
+
+    # initialize the new FST
+    H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
+    H.Q, H.E, H.qe, H.stout = [], [], FST.encode_state("LEFT", F.qe), {}
+
+    # copy over the states from both `F` and `G`
+    for qf in F.Q:
+        H.Q.append(FST.encode_state("LEFT", qf))
+    for qg in G.Q:
+        H.Q.append(FST.encode_state("RIGHT", qg))
+
+    # copy over the transitions from both `F` and `G`
+    for [qf, u, v, qf_] in F.E:
+        H.E.append([FST.encode_state("LEFT", qf), u, v, FST.encode_state("LEFT", qf_)])
+    for [qg, u, v, qg_] in G.E:
+        H.E.append([FST.encode_state("RIGHT", qg), u, v, FST.encode_state("RIGHT", qg_)])
+
+    # for every final state,
+    # create an epsilon transition to nondeterministically begin running the next machine
+    for qf in F.stout.keys():
+        H.E.append([FST.encode_state("LEFT", qf), "", "", FST.encode_state("RIGHT", G.qe)])
+    
+    # cope over the final transitions of the other machine
+    for qg, w in G.stout:
+        H.stout[FST.encode_state("RIGHT", qg)] = w
+
+    return H
+
+def kleene_closue(F):
+    """Given an FST that accepts the relation `R`,
+    returns an FST that accepts the relation `R*`.
+    That is, the relation of all string pairs that are the result of
+    concatenating many string pairs from `R`.
+
+    Ensures:
+        final-output emptiness
+    
+    Invariants:
+        trimmedness
+        input-string expansion
+
+    Args:
+        F (FST): the original FST.
+    
+    Returns:
+        FST: the kleene-closure FST.
+    """
+    # we need final outputs to be empty
+    # so that we do not miss output upon traversal back to the initial state
+    F = expand_final(F)
+
+    # initialize the new FST
+    G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), deepcopy(F.E), F.qe, deepcopy(F.stout)
+
+    # for every final state,
+    # create an epsilon transition to nondeterministically return to the initial state
+    for q in G.stout.keys():
+        tr = [q, "", "", G.qe]
+        if tr not in G.E:
+            G.E.append(tr)
+
+    return G
+
 def prefix_closure(F):
     """Given an FST whose domain is the language `L`,
     returns an FST whose domain is the language `prefixes(L)`.
@@ -393,7 +541,7 @@ def prefix_closure(F):
 
     # mark every state as accepting,
     # unless the FST is just one rejecting state, which is the empty FST edge case
-    if not (len(F.Q) == 1 and len(F.stout) == 0):
+    if not F.is_trim_but_empty():
         for q in F.Q:
             if q not in F.stout:
                 F.stout[q] = ""
