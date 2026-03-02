@@ -13,7 +13,8 @@ Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
 that accepts a relation over strings.
 Specifically, added `fresh_state`, `encode_state`, `trim_inaccessible`, `trim_useless`, `trim`,
-`invert`, `expand`, `prefix_closure`, `union`, `intersect`, `compose`, and `determinize`.
+`expand_inputs`, `expand_final`, `invert`, `prefix_closure`, `union`, `intersect`, `compose`,
+and `determinize`.
 
 These functions assume the following `FST` representation invariants, stated as type annotations:
     Q (Annotated[list[str], "no duplicates"])
@@ -174,25 +175,26 @@ def trim_inaccessible(F):
     """
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
-    G.Q, G.E, G.qe, G.stout = [], [], F.qe, {}
+    Q_set, E_set, G.qe, G.stout = set(), set(), F.qe, {}
 
     # perform a breadth-first traversal of the original FST from the initial state
     worklist = Queue()
     worklist.put(F.qe)
     while not worklist.empty():
         curr_q = worklist.pop()
-        if curr_q not in G.Q:
-            G.Q.append(curr_q)
+        if curr_q not in Q_set:
+            Q_set.insert(curr_q)
             for [q, u, v, q_] in F.E:
                 if curr_q == q:
-                    G.E.insert([q, u, v, q_])
+                    E_set.insert([q, u, v, q_])
                     worklist.put(q_)
 
     # copy over the final outputs of the states that remain
     for q, w in F.stout:
-        if q in G.Q:
-            G.stoud[q] = w
+        if q in Q_set:
+            G.stout[q] = w
 
+    G.Q, G.E = list(Q_set), list(E_set)
     return G
 
 def trim_useless(F):
@@ -214,7 +216,7 @@ def trim_useless(F):
     """
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
-    G.Q, G.E, G.qe, G.stout = [], [], F.qe, {}
+    Q_set, E_set, G.qe, G.stout = set(), set(), F.qe, {}
 
     # perform a breadth-first traversal of the original FST from the accepting states
     worklist = Queue()
@@ -222,22 +224,23 @@ def trim_useless(F):
         worklist.put(q)
     while not worklist.empty():
         curr_q_ = worklist.pop()
-        if curr_q_ not in G.Q:
-            G.Q.append(curr_q_)
+        if curr_q_ not in Q_set:
+            Q_set.insert(curr_q_)
             for [q, u, v, q_] in F.E:
                 if curr_q_ == q_:
-                    G.E.insert([q, u, v, q_])
+                    E_set.insert([q, u, v, q_])
                     worklist.put(q)
 
     # add back the initial state if it was not traversed already
-    if G.qe not in G.Q:
-        G.Q.append(G.qe)
+    if G.qe not in Q_set:
+        Q_set.insert(G.qe)
 
     # copy over the final outputs of the states that remain
     for q, w in F.stout:
-        if q in G.Q:
+        if q in Q_set:
             G.stout[q] = w
 
+    G.Q, G.E = list(Q_set), list(E_set)
     return G
 
 def trim(F):
@@ -260,43 +263,7 @@ def trim(F):
     """
     return trim_useless(trim_inaccessible(F))
 
-def invert(F):
-    """Given an FST that accepts the relation `R`,
-    returns an FST that accepts the relation `{ (u, v) | (v, u) ∈ R }`.
-
-    Ensures:
-        final-output emptiness
-
-    Invariants:
-        trimmedness
-
-    Args:
-        F (FST): the original FST.
-
-    Returns:
-        FST: the inverted FST.
-    """
-    # initialize the new FST
-    G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
-    G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), [], F.qe, {}
-
-    # copy over the transitions with swapped input an output strings
-    for [q, u, v, q_] in G.E:
-        G.E.append([q, v, u, q_])
-
-    # account for nonempty final outputs by turning them into transitions to new accepting states,
-    # if empty then just copy the final output verbatim
-    for q, w in F.stout:
-        if w == "":
-            G.stout[q] = ""
-        else:
-            G.Q.append(q_ := G.fresh_state_name(q))
-            G.E.append([q, w, "", q_])
-            G.stout[q_] = ""
-
-    return G
-
-def expand(F):
+def expand_inputs(F):
     """Expands transitions with multi-character input strings
     into non-accepting chains of transitions with single-character input strings.
 
@@ -339,6 +306,68 @@ def expand(F):
     G.Q, G.E = list(Q_set), list(E_set)
     return G
 
+def expand_final(F):
+    """Expands final states with nonempty output strings
+    into a non-accepting state with a transition to a new accepting state.
+
+    Ensures:
+        final-output emptiness
+
+    Invariants:
+        trimmedness
+        input-string expansion
+
+    Args:
+        F (FST): the original FST.
+    
+    Returns:
+        FST: an FST that accepts the same relation but has no nonempty final outputs.
+    """
+    # initialize the new FST
+    G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), deepcopy(F.E), F.qe, {}
+
+    # account for nonempty final outputs by turning them into transitions to new accepting states,
+    # if empty then just copy the final output verbatim
+    for q, w in F.stout:
+        if w == "":
+            G.stout[q] = ""
+        else:
+            G.Q.append(q_ := G.fresh_state_name(q))
+            G.E.append([q, "", w, q_])
+            G.stout[q_] = ""
+
+    return G
+
+def invert(F):
+    """Given an FST that accepts the relation `R`,
+    returns an FST that accepts the relation `{ (u, v) | (v, u) ∈ R }`.
+
+    Ensures:
+        final-output emptiness
+
+    Invariants:
+        trimmedness
+
+    Args:
+        F (FST): the original FST.
+
+    Returns:
+        FST: the inverted FST.
+    """
+    # we need final outputs to be empty because the FST class does not support final inputs
+    F = expand_final(F)
+
+    # initialize the new FST
+    G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), [], F.qe, deepcopy(F.stout)
+
+    # copy over the transitions with swapped input an output strings
+    for [q, u, v, q_] in F.E:
+        G.E.append([q, v, u, q_])
+
+    return G
+
 def prefix_closure(F):
     """Given an FST whose domain is the language `L`,
     returns an FST whose domain is the language `prefixes(L)`.
@@ -360,7 +389,7 @@ def prefix_closure(F):
         FST: the prefix-closure FST.
     """
     # construct an FST where exactly the prefix closure of the original domain has valid runs
-    F = expand(trim(F))
+    F = expand_inputs(trim(F))
 
     # mark every state as accepting,
     # unless the FST is just one rejecting state, which is the empty FST edge case
