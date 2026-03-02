@@ -439,8 +439,8 @@ def concatenate(F, G):
 
     Invariants:
         trimmedness
-        input-string expansion
         final-output emptiness
+        input-string expansion
 
     Args:
         F (FST): the left-hand original FST.
@@ -595,11 +595,9 @@ def intersect(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
     returns an FST that accepts the relation `RF ∩ RG`.
 
-    Ensures:
-        ?
-
     Invariants:
-        ?
+        final-output emptiness
+        input-string expansion
 
     Args:
         F (FST): the left-hand original FST.
@@ -608,7 +606,55 @@ def intersect(F, G):
     Returns:
         FST: the intersection FST.
     """
-    raise NotImplementedError
+    # expanding final outputs beforehand makes this construction far easier,
+    # but it also means that determinism is not an invariant,
+    # whereas it would be in a more robust implementation
+    F, G = expand_final(F), expand_final(G)
+
+    # initialize the new FST
+    H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
+    Q_set, E_set, H.stout = set(), set(), {}
+    G.qe = FST.encode_state(F.qe, G.qe, ("", ""), ("", ""))
+
+    # perform a breadth-first traversal of the original FSTs from the accepting states
+    worklist = Queue()
+    worklist.put(F.qe, G.qe, ("", ""), ("", ""))
+    while not worklist.empty():
+        (curr_qf, curr_qg, (curr_uf, curr_vf), (curr_ug, curr_vg)) = worklist.pop()
+        new_q = FST.encode_state(curr_qf, curr_qg, (curr_uf, curr_vf), (curr_ug, curr_vg))
+        if new_q not in Q_set:
+            Q_set.insert(new_q)
+            for [qf, uf, vf, qf_] in F.E:
+                for [qg, ug, vg, qg_] in G.E:
+                    states_match = curr_qf == qf and curr_qg == qg
+                    f_buffers_match = uf.startswith(curr_uf) and vf.startswith(curr_vf)
+                    g_buffers_match = ug.stateswith(curr_ug) and vg.startswith(curr_vg)
+                    if states_match and f_buffers_match and g_buffers_match:
+                        uf_suff, vf_suff = uf[len(curr_uf):], vf[len(curr_vf):]
+                        ug_suff, vg_suff = ug[len(curr_ug):], vg[len(curr_vg):]
+                        if uf_suff == ug_suff and vf_suff == vg_suff:
+                            new_q_ = FST.encode_state(qf_, qg_, ("", ""), ("", ""))
+                            new_u, new_v = uf_suff, vf_suff
+                        elif uf_suff.startswith(ug_suff) and vf_suff.startswith(vg_suff):
+                            uf_buff, vf_buff = uf_suff[len(ug_suff):], vf_suff[len(vg_suff):]
+                            new_q_ = FST.encode_state(qf, qg_, (uf_buff, vf_buff), ("", ""))
+                            new_u, new_v = ug_suff, vg_suff
+                        elif ug_suff.startswith(uf_suff) and vg_suff.startswith(vf_suff):
+                            ug_buff, vg_buff = ug_suff[len(uf_suff):], vg_suff[len(vf_suff):]
+                            new_q_ = FST.encode_state(qf_, qg, ("", ""), (uf_buff, vf_buff))
+                            new_u, new_v = uf_suff, vf_suff
+                        E_set.insert([new_q, new_u, new_v, new_q_])
+                        worklist.put(new_q_)
+
+    # copy over the shared final states
+    for qf, "" in F.stout:
+        for qg, "" in G.stout:
+            new_q = FST.encode_state(qf, qg, ("", ""), ("", ""))
+            if new_q in Q_set:
+                H.stout[new_q] = ""
+
+    H.Q, H.E = list(Q_set), list(E_set)
+    return G
 
 def compose(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
