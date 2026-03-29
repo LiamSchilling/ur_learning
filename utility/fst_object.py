@@ -11,9 +11,9 @@ Modified by William (Liam) Schilling:
 
 Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
-that accepts a relation over strings. Most notably, added
-`trim`, `expand_inputs`, `expand_final`, `invert`, `concatenate`, `kleene_closure`,
-`prefix_closure`, `union`, `intersect`, `compose`, and `determinize`.
+that accepts a relation over strings.
+Added trimming, inversion, concatenation, Kleene closure, prefix closure, union, intersection,
+composition, and determinization.
 
 These functions assume the following `FST` representation invariants, stated as type annotations:
     Q (Annotated[list[str], "no duplicates"])
