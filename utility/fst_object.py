@@ -1,20 +1,19 @@
 """A class defining the Finite State Transducer.
 Copyright (C) 2019 Alena Aksenova.
-Copyright (C) 2026 William (Liam) Schilling.
+Copyright (C) 2026 William Schilling.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the
 Free Software Foundation; either version 3 of the License, or (at your
 option) any later version.
 
-Modified by William (Liam) Schilling (Feb. 2026):
+Modified by William (Liam) Schilling:
 
 Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
-that accepts a relation over strings.
-Specifically, added `fresh_state`, `encode_state`, `trim_inaccessible`, `trim_useless`, `trim`,
-`expand_inputs`, `expand_final`, `invert`, `concatenate`, `kleene_closure`, `prefix_closure`,
-`union`, `intersect`, `compose`, and `determinize`.
+that accepts a relation over strings. Most notably, added
+`trim`, `expand_inputs`, `expand_final`, `invert`, `concatenate`, `kleene_closure`,
+`prefix_closure`, `union`, `intersect`, `compose`, and `determinize`.
 
 These functions assume the following `FST` representation invariants, stated as type annotations:
     Q (Annotated[list[str], "no duplicates"])
@@ -105,6 +104,32 @@ class FST:
 
         result = tuple(result)
         return result
+    
+    def transition(self, q, w):
+        """Traverses from the state `q` according to the string `w`,
+        and returns the resulting state.
+        Returns `None` if a missing transition is encountered.
+
+        Args:
+            q: the start state.
+            w (str): a string to read.
+
+        Returns:
+            the state reached by `w` from `q`, or `None`.
+        """
+        if self.Q == None:
+            raise ValueError("The transducer needs to be constructed.")
+        
+        for c in w:
+            moved = False
+            for tr in self.E:
+                if tr[0] == q and tr[1] == c:
+                    q = tr[3]
+                    break
+            if not moved:
+                return None
+        
+        return q
 
     def copy_fst(self):
         """Produces a deep copy of the current FST.
@@ -116,6 +141,7 @@ class FST:
         T.Q = deepcopy(self.Q)
         T.Sigma = deepcopy(self.Sigma)
         T.Gamma = deepcopy(self.Gamma)
+        T.qe = deepcopy(self.qe)
         T.E = deepcopy(self.E)
         T.stout = deepcopy(self.stout)
 
