@@ -68,6 +68,14 @@ class FST:
         self.E = None
         self.stout = None
 
+    def __str__(self):
+        return f'''FST(
+    (Sigma, Gamma) = ({self.Sigma}, {self.Gamma}),
+    Q = {self.Q},
+    qe = '{self.qe}',
+    E = {self.E},
+    stout = {self.stout} )'''
+
     def rewrite(self, w):
         """Rewrites the given string with respect to the rules represented in
         the current FST.
@@ -117,14 +125,12 @@ class FST:
         Returns:
             the state reached by `w` from `q`, or `None`.
         """
-        if self.Q == None:
-            raise ValueError("The transducer needs to be constructed.")
-        
         for c in w:
             moved = False
             for tr in self.E:
                 if tr[0] == q and tr[1] == c:
                     q = tr[3]
+                    moved = True
                     break
             if not moved:
                 return None
@@ -141,7 +147,7 @@ class FST:
         T.Q = deepcopy(self.Q)
         T.Sigma = deepcopy(self.Sigma)
         T.Gamma = deepcopy(self.Gamma)
-        T.qe = deepcopy(self.qe)
+        T.qe = self.qe
         T.E = deepcopy(self.E)
         T.stout = deepcopy(self.stout)
 
@@ -170,7 +176,7 @@ class FST:
         """Returns a name that encodes the values of all the passed arguments.
         The encoding is guaranteed to be one-to-one as long as
         the string representations of the arguments do not contain `;`, `<`, or `>`,
-        except for from previous invokations of this function.
+        except for from previous invocations of this function.
 
         It is important that the client adhere to this condition in their FSTs,
         or else the state encodings produced by functions in our library
@@ -182,9 +188,9 @@ class FST:
         Return:
             str: a name that encodes the values of the arguments.
         """
-        return f"<{args.map(str).join(";")}>"
+        return f"<{"; ".join(map(str, args))}>"
     
-    def is_trim_but_empty(F):
+    def is_trim_but_empty(self):
         """A helper function that checks
         whether an FST is the edge case of the trimmedness condition.
         That is, the empty FST with one rejecting state and no transitions.
@@ -195,7 +201,7 @@ class FST:
         Returns:
             bool: whether the FST has one rejecting state and no transitions.
         """
-        return len(F.Q) == 1 and len(F.E) == 0 and len(F.stout) == 0
+        return len(self.Q) == 1 and len(self.E) == 0 and len(self.stout) == 0
     
 def new_rejector(Sigma, Gamma):
     """Creates an FST that rejects every string pair.
@@ -270,20 +276,20 @@ def trim_inaccessible(F):
     worklist = Queue()
     worklist.put(F.qe)
     while not worklist.empty():
-        curr_q = worklist.pop()
+        curr_q = worklist.get()
         if curr_q not in Q_set:
-            Q_set.insert(curr_q)
+            Q_set.add(curr_q)
             for [q, u, v, q_] in F.E:
                 if curr_q == q:
-                    E_set.insert([q, u, v, q_])
+                    E_set.add((q, u, v, q_))
                     worklist.put(q_)
 
     # copy over the final outputs of the states that remain
-    for q, w in F.stout:
+    for q, w in F.stout.items():
         if q in Q_set:
             G.stout[q] = w
 
-    G.Q, G.E = list(Q_set), list(E_set)
+    G.Q, G.E = list(Q_set), list(map(list, list(E_set)))
     return G
 
 def trim_useless(F):
@@ -312,24 +318,23 @@ def trim_useless(F):
     for q in F.stout.keys():
         worklist.put(q)
     while not worklist.empty():
-        curr_q_ = worklist.pop()
+        curr_q_ = worklist.get()
         if curr_q_ not in Q_set:
-            Q_set.insert(curr_q_)
+            Q_set.add(curr_q_)
             for [q, u, v, q_] in F.E:
                 if curr_q_ == q_:
-                    E_set.insert([q, u, v, q_])
+                    E_set.add((q, u, v, q_))
                     worklist.put(q)
 
     # add back the initial state if it was not traversed already
-    if G.qe not in Q_set:
-        Q_set.insert(G.qe)
+    Q_set.add(G.qe)
 
     # copy over the final outputs of the states that remain
-    for q, w in F.stout:
+    for q, w in F.stout.items():
         if q in Q_set:
             G.stout[q] = w
 
-    G.Q, G.E = list(Q_set), list(E_set)
+    G.Q, G.E = list(Q_set), list(map(list, list(E_set)))
     return G
 
 def trim(F):
@@ -351,6 +356,17 @@ def trim(F):
         FST: the trimmed FST.
     """
     return trim_useless(trim_inaccessible(F))
+
+def is_empty(F):
+    """Checks that the FST accepts no string pairs.
+
+    Args:
+        F (FST): the target FST.
+
+    Returns:
+        bool: `True` iff there is no string pair that `F` accepts.
+    """
+    return trim(F).is_trim_but_empty()
 
 def expand_inputs(F):
     """Expands transitions with multi-character input strings
@@ -381,18 +397,18 @@ def expand_inputs(F):
     # of the form `[<q; w>, c, "", <q; wc>]`, where `wc` is an incomplete prefix of `u`,
     # along with the completing transition `[<q; w>, c, v, <q'; "">]`, where `wc` equals `u`.
     for q in F.Q:
-        Q_set.insert(FST.encode_state(q, ""))
+        Q_set.add(FST.encode_state(q, ""))
     for [q, u, v, q_] in F.E:
         for i in range(1, len(u)):
-            Q_set.insert(FST.encode_state(q, u[:i]))
-            E_set.insert([FST.encode_state(q, u[:i-1]), u[i-1], "", FST.encode_state(q, u[:i])])
-        E_set.insert([FST.encode_state(q, u[:-1]), u[-1:], v, FST.encode_state(q_, "")])
+            Q_set.add(FST.encode_state(q, u[:i]))
+            E_set.add((FST.encode_state(q, u[:i-1]), u[i-1], "", FST.encode_state(q, u[:i])))
+        E_set.add((FST.encode_state(q, u[:-1]), u[-1:], v, FST.encode_state(q_, "")))
 
     # copy over the final outputs
-    for q, w in F.stout:
+    for q, w in F.stout.items():
         G.stout[FST.encode_state(q, "")] = w
 
-    G.Q, G.E = list(Q_set), list(E_set)
+    G.Q, G.E = list(Q_set), list(map(list, list(E_set)))
     return G
 
 def expand_final(F):
@@ -405,6 +421,7 @@ def expand_final(F):
     Invariants:
         trimmedness
         input-string expansion
+        determinism IF already final-output empty
 
     Args:
         F (FST): the original FST.
@@ -418,11 +435,11 @@ def expand_final(F):
 
     # account for nonempty final outputs by turning them into transitions to new accepting states,
     # if empty then just copy the final output verbatim
-    for q, w in F.stout:
+    for q, w in F.stout.items():
         if w == "":
             G.stout[q] = ""
         else:
-            G.Q.append(q_ := G.fresh_state_name(q))
+            G.Q.append(q_ := G.fresh_state(q))
             G.E.append([q, "", w, q_])
             G.stout[q_] = ""
 
@@ -464,7 +481,7 @@ def concatenate(F, G):
     concatenating a string pair from `RF` to a string pair from `RG`.
 
     Invariants:
-        trimmedness
+        trimmedness IF both nonempty
         final-output emptiness
         input-string expansion
 
@@ -480,7 +497,7 @@ def concatenate(F, G):
     F = expand_final(F)
 
     # initialize the new FST
-    H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
+    H = FST(list(set(F.Sigma) | set(G.Sigma)), list(set(F.Gamma) | set(G.Gamma)))
     H.Q, H.E, H.qe, H.stout = [], [], FST.encode_state("LEFT", F.qe), {}
 
     # copy over the states from both `F` and `G`
@@ -500,13 +517,13 @@ def concatenate(F, G):
     for qf in F.stout.keys():
         H.E.append([FST.encode_state("LEFT", qf), "", "", FST.encode_state("RIGHT", G.qe)])
     
-    # cope over the final transitions of the other machine
-    for qg, w in G.stout:
+    # copy over the final transitions of the other machine
+    for qg, w in G.stout.items():
         H.stout[FST.encode_state("RIGHT", qg)] = w
 
     return H
 
-def kleene_closue(F):
+def kleene_closure(F):
     """Given an FST that accepts the relation `R`,
     returns an FST that accepts the relation `R*`.
     That is, the relation of all string pairs that are the result of
@@ -545,7 +562,7 @@ def kleene_closue(F):
 def prefix_closure(F):
     """Given an FST whose domain is the language `L`,
     returns an FST whose domain is the language `prefixes(L)`.
-    How the function treats FST outputs is currently underspecified, though we guarantee that
+    How the function treats FST outputs is underspecified, though we guarantee that
     the relation accepted by the original FST is a subset of the relation accepted by the new FST.
 
     Ensures:
@@ -569,7 +586,7 @@ def prefix_closure(F):
     # unless the FST is just one rejecting state, which is the empty FST edge case
     if not F.is_trim_but_empty():
         for q in F.Q:
-            if q not in F.stout:
+            if q not in F.stout.keys():
                 F.stout[q] = ""
 
     return F
@@ -579,7 +596,7 @@ def union(F, G):
     returns an FST that accepts the relation `RF ∪ RG`.
 
     Invariants:
-        trimmedness
+        trimmedness IF both nonempty
         final-output emptiness
         input-string expansion
 
@@ -591,7 +608,7 @@ def union(F, G):
         FST: the union FST.
     """
     # initialize the new FST
-    H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
+    H = FST(list(set(F.Sigma) | set(G.Sigma)), list(set(F.Gamma) | set(G.Gamma)))
     H.Q, H.E, H.qe, H.stout = [], [], FST.encode_state("LEFT", F.qe), {}
 
     # create an epsilon transition to nondeterministically choose between running `F` and `G`
@@ -610,9 +627,9 @@ def union(F, G):
         H.E.append([FST.encode_state("RIGHT", qg), u, v, FST.encode_state("RIGHT", qg_)])
 
     # copy over the final outputs from both `F` and `G`
-    for qf, w in F.stout:
+    for qf, w in F.stout.items():
         H.stout[FST.encode_state("LEFT", qf)] = w
-    for qg, w in G.stout:
+    for qg, w in G.stout.items():
         H.stout[FST.encode_state("RIGHT", qg)] = w
 
     return H
@@ -626,6 +643,7 @@ def intersect(F, G):
 
     Invariants:
         input-string expansion
+        determinism IF already final-output empty
 
     Args:
         F (FST): the left-hand original FST.
@@ -640,48 +658,48 @@ def intersect(F, G):
     F, G = expand_final(F), expand_final(G)
 
     # initialize the new FST
-    H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
+    H = FST(list(set(F.Sigma) | set(G.Sigma)), list(set(F.Gamma) | set(G.Gamma)))
     Q_set, E_set, H.stout = set(), set(), {}
     H.qe = FST.encode_state(F.qe, G.qe, ("", ""), ("", ""))
 
     # perform a breadth-first traversal of the original FSTs from the accepting states
     worklist = Queue()
-    worklist.put(F.qe, G.qe, ("", ""), ("", ""))
+    worklist.put((F.qe, G.qe, ("", ""), ("", "")))
     while not worklist.empty():
-        (curr_qf, curr_qg, (curr_uf, curr_vf), (curr_ug, curr_vg)) = worklist.pop()
+        (curr_qf, curr_qg, (curr_uf, curr_vf), (curr_ug, curr_vg)) = worklist.get()
         new_q = FST.encode_state(curr_qf, curr_qg, (curr_uf, curr_vf), (curr_ug, curr_vg))
         if new_q not in Q_set:
-            Q_set.insert(new_q)
+            Q_set.add(new_q)
             for [qf, uf, vf, qf_] in F.E:
                 for [qg, ug, vg, qg_] in G.E:
                     states_match = curr_qf == qf and curr_qg == qg
                     f_buffers_match = uf.startswith(curr_uf) and vf.startswith(curr_vf)
-                    g_buffers_match = ug.stateswith(curr_ug) and vg.startswith(curr_vg)
+                    g_buffers_match = ug.startswith(curr_ug) and vg.startswith(curr_vg)
                     if states_match and f_buffers_match and g_buffers_match:
                         uf_suff, vf_suff = uf[len(curr_uf):], vf[len(curr_vf):]
                         ug_suff, vg_suff = ug[len(curr_ug):], vg[len(curr_vg):]
                         if uf_suff == ug_suff and vf_suff == vg_suff:
-                            new_q_ = FST.encode_state(qf_, qg_, ("", ""), ("", ""))
+                            new_q_ = (qf_, qg_, ("", ""), ("", ""))
                             new_u, new_v = uf_suff, vf_suff
                         elif uf_suff.startswith(ug_suff) and vf_suff.startswith(vg_suff):
                             uf_buff, vf_buff = uf_suff[len(ug_suff):], vf_suff[len(vg_suff):]
-                            new_q_ = FST.encode_state(qf, qg_, (uf_buff, vf_buff), ("", ""))
+                            new_q_ = (qf, qg_, (uf_buff, vf_buff), ("", ""))
                             new_u, new_v = ug_suff, vg_suff
                         elif ug_suff.startswith(uf_suff) and vg_suff.startswith(vf_suff):
                             ug_buff, vg_buff = ug_suff[len(uf_suff):], vg_suff[len(vf_suff):]
-                            new_q_ = FST.encode_state(qf_, qg, ("", ""), (ug_buff, vg_buff))
+                            new_q_ = (qf_, qg, ("", ""), (ug_buff, vg_buff))
                             new_u, new_v = uf_suff, vf_suff
-                        E_set.insert([new_q, new_u, new_v, new_q_])
+                        E_set.add((new_q, new_u, new_v, FST.encode_state(*new_q_)))
                         worklist.put(new_q_)
 
     # copy over the shared final states
-    for qf, _ in F.stout:
-        for qg, _ in G.stout:
+    for qf in F.stout.keys():
+        for qg in G.stout.keys():
             new_q = FST.encode_state(qf, qg, ("", ""), ("", ""))
             if new_q in Q_set:
                 H.stout[new_q] = ""
 
-    H.Q, H.E = list(Q_set), list(E_set)
+    H.Q, H.E = list(Q_set), list(map(list, list(E_set)))
     return H
 
 def compose(F, G):
@@ -696,6 +714,7 @@ def compose(F, G):
 
     Invariants:
         input-string expansion
+        determinism IF already final-output empty
 
     Args:
         F (FST): the left-hand (second applied) original FST.
@@ -710,51 +729,53 @@ def compose(F, G):
     F, G = expand_final(F), expand_final(G)
 
     # initialize the new FST
-    H = FST(F.Sigma, G.Gamma)
+    H = FST(deepcopy(G.Sigma), deepcopy(F.Gamma))
     Q_set, E_set, H.stout = set(), set(), {}
-    G.qe = FST.encode_state(F.qe, G.qe, "")
+    H.qe = FST.encode_state(F.qe, G.qe, "")
 
     # perform a breadth-first traversal of the original FSTs from the accepting states
     worklist = Queue()
-    worklist.put(F.qe, G.qe, "")
+    worklist.put((F.qe, G.qe, ""))
     while not worklist.empty():
-        (curr_qf, curr_qg, curr_uf) = worklist.pop()
+        (curr_qf, curr_qg, curr_uf) = worklist.get()
         new_q = FST.encode_state(curr_qf, curr_qg, curr_uf)
         if new_q not in Q_set:
-            Q_set.insert(new_q)
+            Q_set.add(new_q)
             for [qg, ug, vg, qg_] in G.E:
                 if curr_qg == qg:
 
                     # perform an inner breadth-first traversal of states reached by `curr_uf + vg`
-                    visited = set()
+                    inner_visited = set()
                     inner_worklist = Queue()
-                    inner_worklist.put(curr_qf, curr_uf + vg, "")
+                    inner_worklist.put((curr_qf, curr_uf + vg, ""))
                     while not inner_worklist.empty():
-                        (curr_qf, curr_uf, curr_vf) = inner_worklist.pop()
-                        if (curr_qf, curr_uf) not in visited:
-                            visited.insert((curr_qf, curr_uf))
+                        (inner_curr_qf, inner_curr_uf, inner_curr_vf) = inner_worklist.get()
+                        if (inner_curr_qf, inner_curr_uf) not in inner_visited:
+                            inner_visited.add((inner_curr_qf, inner_curr_uf))
                             for [qf, uf, vf, qf_] in F.E:
-                                if curr_qf == qf:
-                                    if uf.startswith(curr_uf):
-                                        if uf == curr_uf:
-                                            new_q_ = FST.encode_state(qf_, qg_, "")
-                                            new_v = curr_vf + vf
+                                if inner_curr_qf == qf:
+                                    if uf.startswith(inner_curr_uf):
+                                        if uf == inner_curr_uf:
+                                            new_q_ = (qf_, qg_, "")
+                                            new_v = inner_curr_vf + vf
                                         else:
-                                            new_q_ = FST.encode_state(qf, qg_, curr_uf)
-                                            new_v = curr_vf
-                                        E_set.insert([new_q, ug, new_v, new_q_])
+                                            new_q_ = (qf, qg_, inner_curr_uf)
+                                            new_v = inner_curr_vf
+                                        E_set.add((new_q, ug, new_v, FST.encode_state(*new_q_)))
                                         worklist.put(new_q_)
-                                    if curr_uf.startswith(uf):
-                                        inner_worklist.put(qf_, curr_uf[len(uf):], curr_vf + vf)
+                                    if inner_curr_uf.startswith(uf):
+                                        uf_suff = inner_curr_uf[len(uf):]
+                                        new_q_ = (qf_, uf_suff, inner_curr_vf + vf)
+                                        inner_worklist.put(new_q_)
 
     # copy over the shared final states
-    for qf, _ in F.stout:
-        for qg, _ in G.stout:
+    for qf in F.stout.keys():
+        for qg in G.stout.keys():
             new_q = FST.encode_state(qf, qg, "")
             if new_q in Q_set:
                 H.stout[new_q] = ""
 
-    H.Q, H.E = list(Q_set), list(E_set)
+    H.Q, H.E = list(Q_set), list(map(list, list(E_set)))
     return H
 
 def determinize(F):
