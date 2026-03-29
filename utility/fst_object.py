@@ -621,8 +621,10 @@ def intersect(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
     returns an FST that accepts the relation `RF ∩ RG`.
 
-    Invariants:
+    Ensures:
         final-output emptiness
+
+    Invariants:
         input-string expansion
 
     Args:
@@ -640,7 +642,7 @@ def intersect(F, G):
     # initialize the new FST
     H = FST(list(set(F.Sigma).union(G.Sigma)), list(set(F.Gamma).union(G.Gamma)))
     Q_set, E_set, H.stout = set(), set(), {}
-    G.qe = FST.encode_state(F.qe, G.qe, ("", ""), ("", ""))
+    H.qe = FST.encode_state(F.qe, G.qe, ("", ""), ("", ""))
 
     # perform a breadth-first traversal of the original FSTs from the accepting states
     worklist = Queue()
@@ -667,20 +669,20 @@ def intersect(F, G):
                             new_u, new_v = ug_suff, vg_suff
                         elif ug_suff.startswith(uf_suff) and vg_suff.startswith(vf_suff):
                             ug_buff, vg_buff = ug_suff[len(uf_suff):], vg_suff[len(vf_suff):]
-                            new_q_ = FST.encode_state(qf_, qg, ("", ""), (uf_buff, vf_buff))
+                            new_q_ = FST.encode_state(qf_, qg, ("", ""), (ug_buff, vg_buff))
                             new_u, new_v = uf_suff, vf_suff
                         E_set.insert([new_q, new_u, new_v, new_q_])
                         worklist.put(new_q_)
 
     # copy over the shared final states
-    for qf, "" in F.stout:
-        for qg, "" in G.stout:
+    for qf, _ in F.stout:
+        for qg, _ in G.stout:
             new_q = FST.encode_state(qf, qg, ("", ""), ("", ""))
             if new_q in Q_set:
                 H.stout[new_q] = ""
 
     H.Q, H.E = list(Q_set), list(E_set)
-    return G
+    return H
 
 def compose(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
@@ -690,10 +692,10 @@ def compose(F, G):
     this has the effect of typical function composition.
 
     Ensures:
-        ?
+        final-output emptiness
 
     Invariants:
-        ?
+        input-string expansion
 
     Args:
         F (FST): the left-hand (second applied) original FST.
@@ -702,7 +704,58 @@ def compose(F, G):
     Returns:
         FST: the composition FST.
     """
-    raise NotImplementedError
+    # expanding final outputs beforehand makes this construction far easier,
+    # but it also means that determinism is not an invariant,
+    # whereas it would be in a more robust implementation
+    F, G = expand_final(F), expand_final(G)
+
+    # initialize the new FST
+    H = FST(F.Sigma, G.Gamma)
+    Q_set, E_set, H.stout = set(), set(), {}
+    G.qe = FST.encode_state(F.qe, G.qe, "")
+
+    # perform a breadth-first traversal of the original FSTs from the accepting states
+    worklist = Queue()
+    worklist.put(F.qe, G.qe, "")
+    while not worklist.empty():
+        (curr_qf, curr_qg, curr_uf) = worklist.pop()
+        new_q = FST.encode_state(curr_qf, curr_qg, curr_uf)
+        if new_q not in Q_set:
+            Q_set.insert(new_q)
+            for [qg, ug, vg, qg_] in G.E:
+                if curr_qg == qg:
+
+                    # perform an inner breadth-first traversal of states reached by `curr_uf + vg`
+                    visited = set()
+                    inner_worklist = Queue()
+                    inner_worklist.put(curr_qf, curr_uf + vg, "")
+                    while not inner_worklist.empty():
+                        (curr_qf, curr_uf, curr_vf) = inner_worklist.pop()
+                        if (curr_qf, curr_uf) not in visited:
+                            visited.insert((curr_qf, curr_uf))
+                            for [qf, uf, vf, qf_] in F.E:
+                                if curr_qf == qf:
+                                    if uf.startswith(curr_uf):
+                                        if uf == curr_uf:
+                                            new_q_ = FST.encode_state(qf_, qg_, "")
+                                            new_v = curr_vf + vf
+                                        else:
+                                            new_q_ = FST.encode_state(qf, qg_, curr_uf)
+                                            new_v = curr_vf
+                                        E_set.insert([new_q, ug, new_v, new_q_])
+                                        worklist.put(new_q_)
+                                    if curr_uf.startswith(uf):
+                                        inner_worklist.put(qf_, curr_uf[len(uf):], curr_vf + vf)
+
+    # copy over the shared final states
+    for qf, _ in F.stout:
+        for qg, _ in G.stout:
+            new_q = FST.encode_state(qf, qg, "")
+            if new_q in Q_set:
+                H.stout[new_q] = ""
+
+    H.Q, H.E = list(Q_set), list(E_set)
+    return H
 
 def determinize(F):
     """Turns a nondeterministic FST that recognizes a subsequential function
