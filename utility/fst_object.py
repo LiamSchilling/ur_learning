@@ -12,8 +12,12 @@ Modified by William (Liam) Schilling:
 Implemented core finite-state operations,
 taking `FST` to be a general (potentially nondeterministic) finite-state transducer
 that accepts a relation over strings.
-Added trimming, inversion, concatenation, Kleene closure, prefix closure, union, intersection,
-composition, and determinization.
+Added trimming, inversion, concatenation, Kleene closure,
+union, intersection, composition, and determinization.
+
+Exposed additional variations of rewrite and transition functions to the user.
+The previous implementation of `rewrite` has been divided into some smaller functions,
+but the resulting `rewrite` function has the same behavior as before.
 
 These functions assume the following `FST` representation invariants, stated as type annotations:
     Q (Annotated[list[str], "no duplicates"])
@@ -70,27 +74,30 @@ class FST:
 
     def __str__(self):
         return f'''FST(
-    (Sigma, Gamma) = ({self.Sigma}, {self.Gamma}),
-    Q = {self.Q},
-    qe = '{self.qe}',
-    E = {self.E},
-    stout = {self.stout} )'''
+    (Sigma, Gamma)=({self.Sigma}, {self.Gamma}),
+    Q={self.Q},
+    qe='{self.qe}',
+    E={self.E},
+    stout={self.stout}
+)'''
 
-    def rewrite(self, w):
-        """Rewrites the given string with respect to the rules represented in
-        the current FST.
+    def rewrite_from(self, q, w):
+        """Performs a partial rewrite of the given string with respect to the rules represented in
+        the current FST. That is, a rewrite starting from some intermediate state `q`.
 
         Arguments:
+            q: the start state.
             w (str): a string that needs to be rewritten.
+
         Outputs:
-            str: the translation of the input string.
+            str: the translation of the input string starting from `q`.
         """
         if self.Q == None:
             raise ValueError("The transducer needs to be constructed.")
 
         # move through the transducer and write the output
         result = []
-        current_state = self.qe
+        current_state = q
         moved = False
         for i in range(len(w)):
             for tr in self.E:
@@ -113,7 +120,27 @@ class FST:
         result = tuple(result)
         return result
     
-    def transition(self, q, w):
+    def rewrite(self, w):
+        """Rewrites the given string with respect to the rules represented in
+        the current FST.
+
+        Arguments:
+            w (str): a string that needs to be rewritten.
+
+        Outputs:
+            str: the translation of the input string.
+        """
+        return self.rewrite_from(self.qe, w)
+    
+    def flat_rewrite_from(self, q, w):
+        """A version of `rewrite_from` that flattens the list of output strings into one string."""
+        return "".join(self.rewrite_from(q, w))
+    
+    def flat_rewrite(self, w):
+        """A version of `rewrite` that flattens the list of output strings into one string."""
+        return "".join(self.rewrite(w))
+    
+    def transition_from(self, q, w):
         """Traverses from the state `q` according to the string `w`,
         and returns the resulting state.
         Returns `None` if a missing transition is encountered.
@@ -134,8 +161,20 @@ class FST:
                     break
             if not moved:
                 return None
-        
         return q
+
+    def in_domain_from(self, q, w):
+        """Traverses from the state `q` according to the string `w`,
+        and returns `True` iff the traversal is a success.
+
+        Args:
+            q: the start state.
+            w (str): a string to read.
+
+        Returns:
+            `True` iff `w` is in the domain of the FST starting from `q`.
+        """
+        return self.transition_from(q, w) is not None
 
     def copy_fst(self):
         """Produces a deep copy of the current FST.
@@ -147,7 +186,7 @@ class FST:
         T.Q = deepcopy(self.Q)
         T.Sigma = deepcopy(self.Sigma)
         T.Gamma = deepcopy(self.Gamma)
-        T.qe = self.qe
+        T.qe = deepcopy(self.qe)
         T.E = deepcopy(self.E)
         T.stout = deepcopy(self.stout)
 
@@ -558,38 +597,6 @@ def kleene_closure(F):
             G.E.append(tr)
 
     return G
-
-def prefix_closure(F):
-    """Given an FST whose domain is the language `L`,
-    returns an FST whose domain is the language `prefixes(L)`.
-    How the function treats FST outputs is underspecified, though we guarantee that
-    the relation accepted by the original FST is a subset of the relation accepted by the new FST.
-
-    Ensures:
-        trimmedness
-        input-string expansion
-
-    Invariants:
-        final-output emptiness
-        determinism
-
-    Args:
-        F (FST): the original FST.
-
-    Returns:
-        FST: the prefix-closure FST.
-    """
-    # construct an FST where exactly the prefix closure of the original domain has valid runs
-    F = expand_inputs(trim(F))
-
-    # mark every state as accepting,
-    # unless the FST is just one rejecting state, which is the empty FST edge case
-    if not F.is_trim_but_empty():
-        for q in F.Q:
-            if q not in F.stout.keys():
-                F.stout[q] = ""
-
-    return F
 
 def union(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
