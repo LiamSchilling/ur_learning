@@ -55,16 +55,18 @@ class FST:
     """A class representing finite state transducers.
 
     Attributes:
-        Q (list): a list of states;
-        Sigma (list): a list of symbols of the input alphabet;
-        Gamma (list): a list of symbols of the output alphabet;
-        qe (str): name of the unique initial state;
-        E (list): a list of transitions;
+        name (str): a descriptive name for this FST.
+        Q (list): a list of states.
+        Sigma (list): a list of symbols of the input alphabet.
+        Gamma (list): a list of symbols of the output alphabet.
+        qe (str): name of the unique initial state.
+        E (list): a list of transitions.
         stout (dict): a collection of state outputs.
     """
 
     def __init__(self, Sigma=None, Gamma=None):
         """Initializes the FST object."""
+        self.name = "unnamed-FST"
         self.Q = None
         self.Sigma = Sigma
         self.Gamma = Gamma
@@ -73,7 +75,11 @@ class FST:
         self.stout = None
 
     def __str__(self):
+        return self.name
+
+    def __repr__(self):
         return f'''FST(
+    name='{self.name}',
     (Sigma, Gamma)=({self.Sigma}, {self.Gamma}),
     Q={self.Q},
     qe='{self.qe}',
@@ -183,13 +189,13 @@ class FST:
             T (FST): a copy of the current FST.
         """
         T = FST()
+        T.name = deepcopy(self.name)
         T.Q = deepcopy(self.Q)
         T.Sigma = deepcopy(self.Sigma)
         T.Gamma = deepcopy(self.Gamma)
         T.qe = deepcopy(self.qe)
         T.E = deepcopy(self.E)
         T.stout = deepcopy(self.stout)
-
         return T
 
     def fresh_state(self, name_prefix):
@@ -260,6 +266,7 @@ def new_rejector(Sigma, Gamma):
     """
     # initialize the new FST
     F = FST(Sigma, Gamma)
+    F.name = "rejector-FST"
     F.Q, F.E, F.qe, F.stout = ["q"], [], "q", {}
 
     return F
@@ -281,6 +288,7 @@ def new_acceptor(Sigma, Gamma):
     """
     # initialize the new FST
     F = FST(Sigma, Gamma)
+    F.name = "acceptor-FST"
     F.Q, F.E, F.qe, F.stout = ["q"], [], "q", {"q" : ""}
 
     # add transitions that allow writing any character to input or output
@@ -309,6 +317,7 @@ def trim_inaccessible(F):
     """
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"trim_inaccessible({F})"
     Q_set, E_set, G.qe, G.stout = set(), set(), F.qe, {}
 
     # perform a breadth-first traversal of the original FST from the initial state
@@ -350,6 +359,7 @@ def trim_useless(F):
     """
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"trim_useless({F})"
     Q_set, E_set, G.qe, G.stout = set(), set(), F.qe, {}
 
     # perform a breadth-first traversal of the original FST from the accepting states
@@ -394,7 +404,10 @@ def trim(F):
     Returns:
         FST: the trimmed FST.
     """
-    return trim_useless(trim_inaccessible(F))
+    G = trim_useless(trim_inaccessible(F))
+    G.name = f"trim({F})"
+
+    return G
 
 def is_empty(F):
     """Checks that the FST accepts no string pairs.
@@ -427,6 +440,7 @@ def expand_inputs(F):
     """
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"expand_inputs({F})"
     Q_set, E_set, G.qe, G.stout = set(), set(), FST.encode_state(F.qe, ""), {}
 
     # Construct the new set of states and transitions.
@@ -470,6 +484,7 @@ def expand_final(F):
     """
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"expand_final({F})"
     G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), deepcopy(F.E), F.qe, {}
 
     # account for nonempty final outputs by turning them into transitions to new accepting states,
@@ -501,10 +516,12 @@ def invert(F):
         FST: the inverted FST.
     """
     # we need final outputs to be empty because the FST class does not support final inputs
+    F_name = F.name
     F = expand_final(F)
 
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"{F_name}⁻¹"
     G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), [], F.qe, deepcopy(F.stout)
 
     # copy over the transitions with swapped input an output strings
@@ -533,10 +550,12 @@ def concatenate(F, G):
     """
     # we need final outputs of the first machine to be empty
     # so that we do not miss output upon traversal to the next machine
+    F_name = F.name
     F = expand_final(F)
 
     # initialize the new FST
     H = FST(list(set(F.Sigma) | set(G.Sigma)), list(set(F.Gamma) | set(G.Gamma)))
+    H.name = f"({F_name} · {G})"
     H.Q, H.E, H.qe, H.stout = [], [], FST.encode_state("LEFT", F.qe), {}
 
     # copy over the states from both `F` and `G`
@@ -583,10 +602,12 @@ def kleene_closure(F):
     """
     # we need final outputs to be empty
     # so that we do not miss output upon traversal back to the initial state
+    F_name = F.name
     F = expand_final(F)
 
     # initialize the new FST
     G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"{F_name}*"
     G.Q, G.E, G.qe, G.stout = deepcopy(F.Q), deepcopy(F.E), F.qe, deepcopy(F.stout)
 
     # for every final state,
@@ -616,6 +637,7 @@ def union(F, G):
     """
     # initialize the new FST
     H = FST(list(set(F.Sigma) | set(G.Sigma)), list(set(F.Gamma) | set(G.Gamma)))
+    H.name = f"({F} ∪ {G})"
     H.Q, H.E, H.qe, H.stout = [], [], FST.encode_state("LEFT", F.qe), {}
 
     # create an epsilon transition to nondeterministically choose between running `F` and `G`
@@ -662,10 +684,12 @@ def intersect(F, G):
     # expanding final outputs beforehand makes this construction far easier,
     # but it also means that determinism is not an invariant,
     # whereas it would be in a more robust implementation
+    F_name, G_name = F.name, G.name
     F, G = expand_final(F), expand_final(G)
 
     # initialize the new FST
     H = FST(list(set(F.Sigma) | set(G.Sigma)), list(set(F.Gamma) | set(G.Gamma)))
+    H.name = f"({F_name} ∩ {G_name})"
     Q_set, E_set, H.stout = set(), set(), {}
     H.qe = FST.encode_state(F.qe, G.qe, ("", ""), ("", ""))
 
@@ -733,10 +757,12 @@ def compose(F, G):
     # expanding final outputs beforehand makes this construction far easier,
     # but it also means that determinism is not an invariant,
     # whereas it would be in a more robust implementation
+    F_name, G_name = F.name, G.name
     F, G = expand_final(F), expand_final(G)
 
     # initialize the new FST
     H = FST(deepcopy(G.Sigma), deepcopy(F.Gamma))
+    H.name = f"({F_name} ∘ {G_name})"
     Q_set, E_set, H.stout = set(), set(), {}
     H.qe = FST.encode_state(F.qe, G.qe, "")
 
