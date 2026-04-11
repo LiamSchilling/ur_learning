@@ -49,6 +49,7 @@ The docstrings declare which are ensured by and which are invariants of the impl
 
 from copy import deepcopy
 from queue import Queue
+from .helper import lcp
 
 class FST:
     """A class representing finite state transducers.
@@ -662,6 +663,39 @@ def union(F, G):
 
     return H
 
+def consume_input_from(F, u, qs):
+    """Given a list of state-string pairs and an input string,
+    runs a nondeterministic FST on the input string
+    from every given state and for every possible nondeterministic choice,
+    accumulating output onto the original given strings.
+
+    To guarantee termination, transition cycles whose input strings are empty
+    are not traversed for more than one consecutive loop,
+    as enfored by the `visited` tracker only considering
+    the state in the FST and the amount of input consumed.
+
+    Args:
+        F (FST): The target FST.
+        u (str): The input string.
+        qs (list[Tuple[str, str]]): A list of start state-string from which to run the FST.
+
+    Returns
+        list[Tuple[str, str]]: All possible results of running the FST.
+    """
+    visited = {}
+    worklist = Queue()
+    for q, v in qs:
+        worklist.put((q, u, v))
+    while not worklist.empty():
+        (curr_q, curr_u, curr_v) = worklist.get()
+        if (curr_q, curr_u) not in visited:
+            visited[(curr_q, curr_u)] = curr_v
+            for [q, u, v, q_] in F.E:
+                if curr_q == q and curr_u.startswith(u):
+                    worklist.put((q_, curr_u[len(u):], curr_v + v))
+
+    return [(q, v) for ((q, u), v) in visited.items() if u == ""]
+
 def left_epsilon_free_compose(F, G):
     """Given FSTs that accept the relations `RF` and `RG`, respectively,
     returns an FST that accepts the relation `{ (u, v) | ∃ w, (u, w) ∈ RG ∧ (w, v) ∈ RF }`.
@@ -710,22 +744,11 @@ def left_epsilon_free_compose(F, G):
         new_q = FST.encode_state(curr_qf, curr_qg)
         if new_q not in Q_set:
             Q_set.add(new_q)
-
-            # for every possible move in `G`, perform a breadth-first traversal of `F` on its output
             for [qg, ug, vg, qg_] in G.E:
                 if curr_qg == qg:
-                    inner_worklist = Queue()
-                    inner_worklist.put((curr_qf, vg, ""))
-                    while not inner_worklist.empty():
-                        (inner_qf, curr_vg, curr_vf) = inner_worklist.get()
-                        if curr_vg == "":
-                            new_q_ = FST.encode_state(inner_qf, qg_)
-                            E_set.add((new_q, ug, curr_vf, new_q_))
-                            worklist.put((inner_qf, qg_))
-                        else:
-                            for [qf, uf, vf, qf_] in F.E:
-                                if inner_qf == qf and curr_vg.startswith(uf):
-                                    inner_worklist.put((qf_, curr_vg[len(uf):], curr_vf + vf))
+                    for (qf_, vf) in consume_input_from(F, vg, [(curr_qf, "")]):
+                        E_set.add((new_q, ug, vf, FST.encode_state(qf_, qg_)))
+                        worklist.put((qf_, qg_))
 
     # copy over the shared final states
     for qf, w in F.stout.items():
@@ -743,13 +766,54 @@ def determinize(F):
     A deterministic FST has only single-character input strings,
     and for each state, at most one outgoing transition with every input string.
 
-    Invariants:
-        ?
+    Ensures:
+        trimmedness
+        input-string expansion
+        determinism
 
     Args:
-        F (FST): the original functional FST.
+        F (FST): the original functional FST.s
     
     Returns:
         FST: an FST that accepts the same function but is deterministic.
     """
-    raise NotImplementedError
+    # expanding inputs in `F` means that we never have to partially traverse a transition
+    # we have to trim `F` so that we get the subsequential guarantees for the whole machine
+    F_name = F.name
+    F = expand_inputs(trim(F))
+
+    # the initial state of the new machine is the set of states reachable
+    # from the initial state of the old machine on the empty string
+    qes = sorted(consume_input_from(F, "", [(F.qe, "")]))
+
+    # initialize the new FST
+    G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"determinize({F_name})"
+    Q_set, E_set, G.qe, G.stout = set(), set(), FST.encode_state(*qes), {}
+
+    # perform a breadth-first traversal of the new FST
+    # by tracking every possible nondeterministic behavior of `F` on consuming each character
+    worklist = Queue()
+    worklist.put(qes)
+    while not worklist.empty():
+        curr_qs = sorted(worklist.get())
+        new_q = FST.encode_state(*curr_qs)
+        if (tuple(curr_qs), new_q) not in Q_set:
+            Q_set.add((tuple(curr_qs), new_q))
+            for c in F.Sigma:
+                qs = sorted(consume_input_from(F, c, curr_qs))
+                if qs != []:
+                    common_output = lcp(*[v for (_, v) in qs])
+                    qs_ = [(q, v[len(common_output):]) for (q, v) in qs]
+                    E_set.add((new_q, c, common_output, FST.encode_state(*qs_)))
+                    worklist.put(qs_)
+
+    # mark any state containing a final state of the original machine as a new final state
+    for (qs, new_q) in Q_set:
+        for (q, v) in qs:
+            if q in F.stout:
+                G.stout[new_q] = v
+                break
+
+    G.Q, G.E = list(map(lambda x : x[1], Q_set)), list(map(list, E_set))
+    return G
