@@ -772,7 +772,7 @@ def determinize(F):
         determinism
 
     Args:
-        F (FST): the original functional FST.s
+        F (FST): the original functional FST.
     
     Returns:
         FST: an FST that accepts the same function but is deterministic.
@@ -816,4 +816,136 @@ def determinize(F):
                 break
 
     G.Q, G.E = list(map(lambda x : x[1], Q_set)), list(map(list, E_set))
+    return G
+
+def onwardize(F):
+    """Pushes forward common prefixes of output strings
+    so that the resulting FST produces output as early as possible.
+
+    Ensures:
+        trimmedness
+    
+    Invariants:
+        final-output emptiness
+        input-string expansion
+        determinism
+    
+    Args:
+        F (FST): the original FST.
+
+    Returns:
+        FST: an FST that recognizes the same relation but it onward.
+    """
+    # initialize the new FST, which we must trim to ensure termination
+    G = trim(F)
+    G.name = f"onwardize({F})"
+
+    # push outputs forward until fixedpoint
+    while True:
+
+        outputs_per_state, common_output_per_state = {}, {}
+
+        # collect all transition outputs indexed by state
+        for [q, _, v , _] in G.E:
+            if q not in outputs_per_state:
+                outputs_per_state[q] = []
+            outputs_per_state[q].append(v)
+        
+        # collect all final outputs indexed by state
+        for q, v in G.stout.items():
+            outputs_per_state[q].append(v)
+        
+        # compute the common prefixes of all output sets
+        for (q, outputs) in outputs_per_state.items():
+            common_output_per_state[q] = lcp(*outputs)
+        
+        # if there are no more nonempty common prefixes, then we are done
+        if all([v == "" for (_, v) in common_output_per_state.items()]):
+            return G
+        
+        # for every transition, push common output forward and recieve pushed common output
+        for tr in G.E:
+            tr[2] = tr[2][len(common_output_per_state[tr[0]]):] + common_output_per_state[tr[3]]
+
+        # for every final output, push common prefix forward
+        for q in G.stout.keys():
+            G.stout[q] = G.stout[q][len(common_output_per_state[q]):]
+
+def minimize(F):
+    """Given a deterministic FST,
+    returns the canonical FST that recognizes the same subsequential function.
+    It will be trim, onward, and minimal in the sense that all states are observably distinct.
+
+    The minimization algorithm uses Hopcroft's partition-refinement strategy
+    (https://en.wikipedia.org/wiki/DFA_minimization).
+    
+    Ensures:
+        trimmedness
+        input-string expansion
+        determinism
+    
+    Invariants:
+        final-output expansion
+    
+    Args:
+        F (FST): the original deterministic FST.
+    
+    Returns:
+        FST: an FST that accepts the same function but is onward.
+    """
+    # we must onwardize the original FST
+    F_name = F.name
+    F = onwardize(F)
+
+    # initialize an overly coarse partition of the states into indexed equivalance classes
+    partition = None
+    class_of = { q : 0 for q in F.Q }
+
+    # refine the partition using local inferences until fixedpoint
+    while True:
+
+        # for every state and final transition,
+        # collect a signature including its output and destination class
+        signature_per_state_per_tr = { q: { u: None for u in [""] + F.Sigma } for q in F.Q }
+        for [q, u, v, q_] in F.E:
+            signature_per_state_per_tr[q][u] = (v, class_of[q_])
+        for q, v in F.stout.items():
+            signature_per_state_per_tr[q][""] = v
+
+        # construct a signature of observable information per state
+        signature_per_state = { q: (
+            class_of[q],
+            tuple(signature_per_state_per_tr[q][u] for u in [""] + F.Sigma)
+        ) for q in F.Q }
+
+        old_partition = partition
+
+        # "transpose" the state signatures by keying sets of nondistinct states by their signature
+        partition = {}
+        for (q, sig) in signature_per_state.items():
+            if sig not in partition:
+                partition[sig] = set()
+            partition[sig].add(q)
+
+        class_of = { q: i for (i, (_, s)) in enumerate(partition.items()) for q in s }
+
+        # if there was no change, then we are done with the refinement
+        if partition == old_partition:
+            break
+    
+    # initialize the new FST
+    G = FST(deepcopy(F.Sigma), deepcopy(F.Gamma))
+    G.name = f"minimize({F_name})"
+    G.E, G.stout = [], {}
+    G.Q = [str(sig[0]) for sig in partition.keys()]
+    G.qe = str(next(sig for (sig, s) in partition.items() if F.qe in s)[0])
+
+    # populate the state and final transitions by reading from the signatures of the partition
+    for sig in partition.keys():
+        if sig[1][0] != None:
+            G.stout[str(sig[0])] = str(sig[1][0])
+        for (i, u) in zip(range(1, len(F.Sigma) + 1), F.Sigma):
+            if sig[1][i] != None:
+                G.E.append([str(sig[0]), u, sig[1][i][0], str(sig[1][i][1])])
+    
     return G
