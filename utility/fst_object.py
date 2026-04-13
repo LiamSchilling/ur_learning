@@ -299,6 +299,89 @@ def new_acceptor(Sigma, Gamma):
 
     return F
 
+def new_identity(Sigma):
+    """Creates an FST that recognizes the identity function.
+    
+    Ensures:
+        trimmedness
+        final-output emptiness
+        input-string expansion
+        determinism
+
+    Args:
+        Sigma (list): the input alphabet.
+        Gamma (list): the output alphabet.
+    
+    Returns:
+        FST: the identity FST.
+    """
+    # initialize the new FST
+    F = FST(Sigma, Sigma)
+    F.name = "identity-FST"
+    F.Q, F.E, F.qe, F.stout = ["q"], [], "q", {"q" : ""}
+
+    # add transitions that allow copying any character from input to output
+    for c in Sigma:
+        F.E.append(["q", c, c, "q"])
+
+    return F
+
+def domain(F):
+    """Given an FST recognizing a relation `R`,
+    returns an FST recognizing the relation `{ (u, u) | ∃ w, (w, u) ∈ R }`.
+
+    Invariants:
+        trimmedness
+        input-string expansion
+        determinism
+
+    Args:
+        F (FST): the original FST.
+    
+    Returns:
+        FST: an FST that recognizes its domain.
+    """
+    # initialize the new FST
+    G = F.copy_fst()
+    G.name = f"dom({F.name})"
+
+    # copy the input string transition of every transition to its output
+    for tr in G.E:
+        tr[2] = tr[1]
+
+    # empty the output strings on final transitions
+    for q in G.stout.keys():
+        G.stout[q] = ""
+    
+    return G
+
+def image(F):
+    """Given an FST recognizing a relation `R`,
+    returns an FST recognizing the relation `{ (u, u) | ∃ w, (u, w) ∈ R }`.
+
+    Ensures:
+        final-output emptiness
+    
+    Invariants:
+        trimmedness
+
+    Args:
+        F (FST): the original FST.
+    
+    Returns:
+        FST: an FST that recognizes its image.
+    """
+    # initialize the new FST
+    # we need final outputs to be empty because the FST class does not support final inputs
+    G = expand_final(F)
+    G.name = f"img({F.name})"
+
+    # copy the output string transition of every transition to its input
+    for tr in G.E:
+        tr[1] = tr[2]
+    
+    return G
+
 def trim_inaccessible(F):
     """Removes states and transitions from the FST
     that are not accessible from the initial state.
