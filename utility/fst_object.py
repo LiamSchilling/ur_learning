@@ -310,7 +310,6 @@ def new_identity(Sigma):
 
     Args:
         Sigma (list): the input alphabet.
-        Gamma (list): the output alphabet.
     
     Returns:
         FST: the identity FST.
